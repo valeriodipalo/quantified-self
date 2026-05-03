@@ -1,10 +1,22 @@
 import type { SessionOptions } from "iron-session";
 
+export interface CaptureState {
+  startedAt: number;
+  endedAt?: number;
+}
+
 export interface SessionData {
   refreshToken?: string;
   accessToken?: string;
   accessTokenExpiresAt?: number;
-  activeSessionStart?: number;
+  capture?: CaptureState;
+}
+
+export type CaptureStage = "idle" | "running" | "finished";
+
+export function captureStage(capture: CaptureState | undefined): CaptureStage {
+  if (!capture) return "idle";
+  return capture.endedAt ? "finished" : "running";
 }
 
 export const sessionOptions: SessionOptions = {

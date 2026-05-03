@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
-import { sessionOptions, SessionData } from "@/lib/session";
+import { sessionOptions, SessionData, captureStage } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -11,14 +11,15 @@ export async function POST() {
   if (!session.refreshToken) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
-  if (session.activeSessionStart) {
+  const stage = captureStage(session.capture);
+  if (stage !== "idle") {
     return NextResponse.json(
-      { error: "session already active", start: session.activeSessionStart },
+      { error: `cannot start while stage=${stage}`, capture: session.capture },
       { status: 409 }
     );
   }
 
-  session.activeSessionStart = Date.now();
+  session.capture = { startedAt: Date.now() };
   await session.save();
-  return NextResponse.json({ start: session.activeSessionStart });
+  return NextResponse.json({ capture: session.capture });
 }

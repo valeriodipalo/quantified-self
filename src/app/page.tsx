@@ -1,7 +1,8 @@
 import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
 import { sessionOptions, SessionData } from "@/lib/session";
-import { TrackerButton } from "@/components/tracker-button";
+import { TopBar } from "@/components/top-bar";
+import { Tracker } from "@/components/tracker";
 
 export const dynamic = "force-dynamic";
 
@@ -12,26 +13,45 @@ export default async function Home({
 }) {
   const session = await getIronSession<SessionData>(await cookies(), sessionOptions);
   const params = await searchParams;
+  const signedIn = Boolean(session.refreshToken);
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-8 px-6 py-12">
-      <div className="flex flex-col items-center gap-2 text-center">
-        <h1 className="text-2xl font-semibold tracking-tight">Quantified Self</h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          Reading tracker
-        </p>
-      </div>
+    <div className="mx-auto flex min-h-screen w-full max-w-[430px] flex-col">
+      <TopBar />
 
       {params.auth_error && (
-        <div className="rounded-md bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-          Sign-in failed: {params.auth_error}
+        <div className="border-b-2 border-ink bg-reading px-[18px] py-3 text-[10px] font-bold uppercase tracking-[1.5px] text-ink">
+          ! AUTH FAILED — {params.auth_error}
         </div>
       )}
 
-      <TrackerButton
-        signedIn={Boolean(session.refreshToken)}
-        activeSessionStart={session.activeSessionStart ?? null}
-      />
-    </main>
+      {signedIn ? (
+        <Tracker initialCapture={session.capture ?? null} />
+      ) : (
+        <SignedOut />
+      )}
+    </div>
+  );
+}
+
+function SignedOut() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center px-[18px] gap-8">
+      <div className="text-center">
+        <div className="text-[9px] font-bold tracking-[2.4px] text-dim">
+          ○ AUTH REQUIRED
+        </div>
+        <div className="mt-2 text-[14px] font-medium tracking-[-0.3px] text-dim max-w-[260px]">
+          Authorize Google Calendar to start logging reading sessions.
+        </div>
+      </div>
+      <a
+        href="/api/auth/google"
+        className="flex h-[84px] w-full items-center justify-center border-2 border-ink bg-reading text-[22px] font-bold uppercase tracking-[5px] text-ink"
+        style={{ boxShadow: "6px 6px 0 var(--color-ink)" }}
+      >
+        SIGN IN
+      </a>
+    </div>
   );
 }
