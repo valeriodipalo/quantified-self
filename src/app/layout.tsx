@@ -11,12 +11,17 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Quantified Self",
   description: "Personal time-tracking PWA — log activities to Google Calendar with one tap.",
+  appleWebApp: {
+    capable: true,
+    title: "QSelf",
+    statusBarStyle: "black-translucent",
+  },
 };
 
 export const viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#f0eadf",
+  themeColor: "#ff5b1f",
 };
 
 export default function RootLayout({
