@@ -20,9 +20,10 @@ export function Tracker({ initialCapture }: Props) {
   const [activeId, setActiveId] = useState<ActivityId>(
     initialCapture?.activity ?? "reading"
   );
-  const [now, setNow] = useState<number>(Date.now());
+  const [now, setNow] = useState<number>(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [debug, setDebug] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   const stage: CaptureStage = !capture ? "idle" : capture.endedAt ? "finished" : "running";
@@ -44,40 +45,66 @@ export function Tracker({ initialCapture }: Props) {
       : 0;
 
   const callApi = async (
+    label: string,
     path: string,
     body: Record<string, unknown> | null,
     onSuccess: (data: { capture: CaptureState | null }) => void
   ) => {
     setBusy(true);
     setError(null);
+    setDebug(`${label} · …`);
     try {
       const res = await fetch(path, {
         method: "POST",
         headers: body ? { "Content-Type": "application/json" } : undefined,
         body: body ? JSON.stringify(body) : undefined,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "request failed");
-      onSuccess(data);
+      let data: { capture?: CaptureState | null; error?: string } = {};
+      try {
+        data = await res.json();
+      } catch {
+        // non-JSON response (e.g. HTML error page) — leave data empty
+      }
+      if (!res.ok) {
+        const msg = data?.error || `http ${res.status}`;
+        setDebug(`${label} · ${res.status} · ${msg}`);
+        throw new Error(msg);
+      }
+      setDebug(`${label} · ${res.status} · ok`);
+      onSuccess(data as { capture: CaptureState | null });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "unknown");
+      const msg = e instanceof Error ? e.message : "unknown";
+      setError(msg);
+      setDebug((prev) => prev ?? `${label} · — · ${msg}`);
     } finally {
       setBusy(false);
     }
   };
 
   const handleStart = () =>
-    callApi("/api/sessions/start", { activity: activeId }, (d) => setCapture(d.capture));
-  const handleStop = () => callApi("/api/sessions/stop", null, (d) => setCapture(d.capture));
+    callApi("start", "/api/sessions/start", { activity: activeId }, (d) =>
+      setCapture(d.capture)
+    );
+  const handleStop = () =>
+    callApi("stop", "/api/sessions/stop", null, (d) => setCapture(d.capture));
   const handleSend = () =>
-    callApi("/api/sessions/send", null, () => {
+    callApi("send", "/api/sessions/send", null, () => {
       setCapture(null);
       startTransition(() => router.refresh());
     });
   const handleDiscard = () =>
-    callApi("/api/sessions/discard", null, () => setCapture(null));
+    callApi("discard", "/api/sessions/discard", null, () => setCapture(null));
 
-  const handleAction = stage === "idle" ? handleStart : stage === "running" ? handleStop : handleSend;
+  const handleAction = () => {
+    setDebug(`tap · ${stage}`);
+    const fn = stage === "idle" ? handleStart : stage === "running" ? handleStop : handleSend;
+    fn();
+  };
+
+  const onDiscardTap = () => {
+    setDebug("tap · discard");
+    handleDiscard();
+  };
 
   const startedAt = capture?.startedAt ?? null;
   const endedAt = capture?.endedAt ?? null;
@@ -166,11 +193,16 @@ export function Tracker({ initialCapture }: Props) {
               accent={accent}
               contrast={activity.contrast}
               busy={busy}
-              onClick={handleDiscard}
+              onClick={onDiscardTap}
             />
           )}
         </div>
         {error && <p className="mt-3 text-[11px] tracking-[1px] text-reading">! {error}</p>}
+        {debug && (
+          <p className="mt-2 text-[10px] tabular-nums tracking-[1px] text-dim break-all">
+            ▸ {debug}
+          </p>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { ErrorReporter } from "@/components/error-reporter";
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-mono",
@@ -31,7 +32,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${jetbrainsMono.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col bg-bg text-ink font-mono">{children}</body>
+      <body className="min-h-full flex flex-col bg-bg text-ink font-mono">
+        <ErrorReporter />
+        {children}
+      </body>
     </html>
   );
 }
