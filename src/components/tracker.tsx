@@ -154,6 +154,13 @@ export function Tracker({ initialCapture }: Props) {
       {/* Big action button */}
       <div className="px-[18px] pt-6 pb-12">
         <div className="flex gap-3">
+          <ActionButton
+            stage={stage}
+            accent={accent}
+            contrast={activity.contrast}
+            busy={busy}
+            onClick={handleAction}
+          />
           {stage === "finished" && (
             <DiscardButton
               accent={accent}
@@ -162,13 +169,6 @@ export function Tracker({ initialCapture }: Props) {
               onClick={handleDiscard}
             />
           )}
-          <ActionButton
-            stage={stage}
-            accent={accent}
-            contrast={activity.contrast}
-            busy={busy}
-            onClick={handleAction}
-          />
         </div>
         {error && <p className="mt-3 text-[11px] tracking-[1px] text-reading">! {error}</p>}
       </div>
