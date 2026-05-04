@@ -74,6 +74,8 @@ export function Tracker({ initialCapture }: Props) {
       setCapture(null);
       startTransition(() => router.refresh());
     });
+  const handleDiscard = () =>
+    callApi("/api/sessions/discard", null, () => setCapture(null));
 
   const handleAction = stage === "idle" ? handleStart : stage === "running" ? handleStop : handleSend;
 
@@ -151,13 +153,23 @@ export function Tracker({ initialCapture }: Props) {
 
       {/* Big action button */}
       <div className="px-[18px] pt-6 pb-12">
-        <ActionButton
-          stage={stage}
-          accent={accent}
-          contrast={activity.contrast}
-          busy={busy}
-          onClick={handleAction}
-        />
+        <div className="flex gap-3">
+          {stage === "finished" && (
+            <DiscardButton
+              accent={accent}
+              contrast={activity.contrast}
+              busy={busy}
+              onClick={handleDiscard}
+            />
+          )}
+          <ActionButton
+            stage={stage}
+            accent={accent}
+            contrast={activity.contrast}
+            busy={busy}
+            onClick={handleAction}
+          />
+        </div>
         {error && <p className="mt-3 text-[11px] tracking-[1px] text-reading">! {error}</p>}
       </div>
     </div>
@@ -239,7 +251,7 @@ function ActionButton({
       type="button"
       onClick={onClick}
       disabled={busy}
-      className="w-full h-[84px] text-[22px] font-bold uppercase border-2 border-ink disabled:opacity-60 disabled:cursor-default"
+      className="flex-1 h-[84px] text-[22px] font-bold uppercase border-2 border-ink disabled:opacity-60 disabled:cursor-default"
       style={{
         background: bg,
         color: fg,
@@ -249,6 +261,40 @@ function ActionButton({
       }}
     >
       {busy ? "…" : label}
+    </button>
+  );
+}
+
+function DiscardButton({
+  accent,
+  contrast,
+  busy,
+  onClick,
+}: {
+  accent: string;
+  contrast: boolean;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  const bg = accent;
+  const fg = contrast ? "var(--color-bg)" : "var(--color-ink)";
+  const shadowColor = contrast ? "var(--color-reading)" : "var(--color-ink)";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      aria-label="Discard"
+      className="h-[84px] w-[84px] shrink-0 text-[28px] font-bold uppercase border-2 border-ink disabled:opacity-60 disabled:cursor-default"
+      style={{
+        background: bg,
+        color: fg,
+        boxShadow: `6px 6px 0 ${shadowColor}`,
+        touchAction: "manipulation",
+      }}
+    >
+      {busy ? "…" : "X"}
     </button>
   );
 }
