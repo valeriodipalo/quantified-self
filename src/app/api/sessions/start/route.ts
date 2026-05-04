@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
-import { sessionOptions, SessionData, captureStage } from "@/lib/session";
+import { sessionOptions, SessionData, ActivityId, captureStage } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+const VALID_ACTIVITIES: ActivityId[] = ["reading", "smoking"];
+
+export async function POST(request: Request) {
   const session = await getIronSession<SessionData>(await cookies(), sessionOptions);
 
   if (!session.refreshToken) {
@@ -19,7 +21,17 @@ export async function POST() {
     );
   }
 
-  session.capture = { startedAt: Date.now() };
+  let activity: ActivityId = "reading";
+  try {
+    const body = (await request.json()) as { activity?: string };
+    if (body?.activity && VALID_ACTIVITIES.includes(body.activity as ActivityId)) {
+      activity = body.activity as ActivityId;
+    }
+  } catch {
+    // No body or invalid JSON — fall back to reading.
+  }
+
+  session.capture = { startedAt: Date.now(), activity };
   await session.save();
   return NextResponse.json({ capture: session.capture });
 }

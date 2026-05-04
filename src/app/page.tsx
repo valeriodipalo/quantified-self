@@ -16,7 +16,7 @@ export default async function Home({
   const signedIn = Boolean(session.refreshToken);
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[430px] flex-col">
+    <div className="mx-auto flex min-h-dvh w-full max-w-[430px] flex-col">
       <TopBar />
 
       {params.auth_error && (
@@ -42,7 +42,7 @@ function SignedOut() {
           ○ AUTH REQUIRED
         </div>
         <div className="mt-2 text-[14px] font-medium tracking-[-0.3px] text-dim max-w-[260px]">
-          Authorize Google Calendar to start logging reading sessions.
+          Authorize Google Calendar to start logging sessions.
         </div>
       </div>
       <a

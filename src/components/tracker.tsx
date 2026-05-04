@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { CaptureState, CaptureStage } from "@/lib/session";
+import type { ActivityId, CaptureState, CaptureStage } from "@/lib/session";
 
 interface Props {
   initialCapture: CaptureState | null;
@@ -11,15 +11,15 @@ interface Props {
 const ACTIVITIES = [
   { id: "reading", label: "Reading", accent: "var(--color-reading)", contrast: false, enabled: true },
   { id: "meditation", label: "Meditation", accent: "var(--color-meditation)", contrast: false, enabled: false },
-  { id: "smoking", label: "Smoking", accent: "var(--color-smoking)", contrast: true, enabled: false },
+  { id: "smoking", label: "Smoking", accent: "var(--color-smoking)", contrast: true, enabled: true },
 ] as const;
-
-type ActivityId = (typeof ACTIVITIES)[number]["id"];
 
 export function Tracker({ initialCapture }: Props) {
   const router = useRouter();
   const [capture, setCapture] = useState<CaptureState | null>(initialCapture);
-  const [activeId] = useState<ActivityId>("reading");
+  const [activeId, setActiveId] = useState<ActivityId>(
+    initialCapture?.activity ?? "reading"
+  );
   const [now, setNow] = useState<number>(Date.now());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,11 +43,19 @@ export function Tracker({ initialCapture }: Props) {
       ? capture.endedAt - capture.startedAt
       : 0;
 
-  const callApi = async (path: string, onSuccess: (data: { capture: CaptureState | null }) => void) => {
+  const callApi = async (
+    path: string,
+    body: Record<string, unknown> | null,
+    onSuccess: (data: { capture: CaptureState | null }) => void
+  ) => {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(path, { method: "POST" });
+      const res = await fetch(path, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "request failed");
       onSuccess(data);
@@ -58,10 +66,11 @@ export function Tracker({ initialCapture }: Props) {
     }
   };
 
-  const handleStart = () => callApi("/api/sessions/start", (d) => setCapture(d.capture));
-  const handleStop = () => callApi("/api/sessions/stop", (d) => setCapture(d.capture));
+  const handleStart = () =>
+    callApi("/api/sessions/start", { activity: activeId }, (d) => setCapture(d.capture));
+  const handleStop = () => callApi("/api/sessions/stop", null, (d) => setCapture(d.capture));
   const handleSend = () =>
-    callApi("/api/sessions/send", () => {
+    callApi("/api/sessions/send", null, () => {
       setCapture(null);
       startTransition(() => router.refresh());
     });
@@ -82,13 +91,16 @@ export function Tracker({ initialCapture }: Props) {
           return (
             <button
               key={a.id}
+              type="button"
               disabled={disabled}
+              onClick={() => setActiveId(a.id as ActivityId)}
               className="flex-1 px-[6px] py-[14px] text-[11px] font-bold uppercase tracking-[2px] disabled:cursor-default"
               style={{
                 background: sel ? a.accent : "var(--color-bg)",
                 color: sel ? (a.contrast ? "var(--color-bg)" : "var(--color-ink)") : "var(--color-ink)",
                 opacity: !a.enabled && !sel ? 0.32 : 1,
                 borderRight: isLast ? "none" : "2px solid var(--color-ink)",
+                touchAction: "manipulation",
               }}
             >
               {a.label}
@@ -224,6 +236,7 @@ function ActionButton({
 
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={busy}
       className="w-full h-[84px] text-[22px] font-bold uppercase border-2 border-ink disabled:opacity-60 disabled:cursor-default"
@@ -232,6 +245,7 @@ function ActionButton({
         color: fg,
         letterSpacing: tracking,
         boxShadow: `6px 6px 0 ${shadowColor}`,
+        touchAction: "manipulation",
       }}
     >
       {busy ? "…" : label}
