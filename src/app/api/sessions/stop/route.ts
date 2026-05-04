@@ -16,7 +16,7 @@ export async function POST() {
   }
 
   session.capture = {
-    startedAt: session.capture!.startedAt,
+    ...session.capture!,
     endedAt: Date.now(),
   };
   await session.save();
