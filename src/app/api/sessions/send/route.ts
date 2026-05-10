@@ -13,6 +13,7 @@ const ACTIVITY_CONFIG: Record<ActivityId, { summary: string; calendarEnv: string
   reading: { summary: "Reading", calendarEnv: "GOOGLE_READING_CALENDAR_ID" },
   smoking: { summary: "Smoking", calendarEnv: "GOOGLE_SMOKING_CALENDAR_ID" },
   meditation: { summary: "Meditation", calendarEnv: "GOOGLE_MEDITATION_CALENDAR_ID" },
+  music: { summary: "Music", calendarEnv: "GOOGLE_MUSIC_CALENDAR_ID" },
 };
 
 const FEEDBACK_MAX_LEN = 4000;

@@ -5,7 +5,7 @@ import { sessionOptions, SessionData, ActivityId, captureStage } from "@/lib/ses
 
 export const dynamic = "force-dynamic";
 
-const VALID_ACTIVITIES: ActivityId[] = ["reading", "smoking", "meditation"];
+const VALID_ACTIVITIES: ActivityId[] = ["reading", "smoking", "meditation", "music"];
 
 export async function POST(request: Request) {
   const session = await getIronSession<SessionData>(await cookies(), sessionOptions);

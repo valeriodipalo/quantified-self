@@ -9,6 +9,7 @@ export const ACTIVITY_CAPS: Record<ActivityId, ActivityCap | null> = {
   reading: { thresholdMs: 90 * 60_000, cappedMs: 45 * 60_000 },
   smoking: { thresholdMs: 10 * 60_000, cappedMs: 6 * 60_000 },
   meditation: null,
+  music: null,
 };
 
 export function applyCap(

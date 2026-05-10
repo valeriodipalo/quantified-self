@@ -10,11 +10,18 @@ interface Props {
   initialCapture: CaptureState | null;
 }
 
+type Shape = "circle" | "square" | "diamond" | "triangle";
+
 const ACTIVITIES = [
-  { id: "reading", label: "Reading", accent: "var(--color-reading)", contrast: false, enabled: true },
-  { id: "meditation", label: "Meditation", accent: "var(--color-meditation)", contrast: true, enabled: true },
-  { id: "smoking", label: "Smoking", accent: "var(--color-smoking)", contrast: true, enabled: true },
+  { id: "reading", label: "Reading", accent: "var(--color-reading)", contrast: false, enabled: true, shape: "circle" satisfies Shape },
+  { id: "meditation", label: "Meditation", accent: "var(--color-meditation)", contrast: true, enabled: true, shape: "square" satisfies Shape },
+  { id: "smoking", label: "Smoking", accent: "var(--color-smoking)", contrast: true, enabled: true, shape: "diamond" satisfies Shape },
+  { id: "music", label: "Music", accent: "var(--color-music)", contrast: true, enabled: true, shape: "triangle" satisfies Shape },
 ] as const;
+
+type Activity = (typeof ACTIVITIES)[number];
+
+type SheetPhase = "closed" | "opening" | "open" | "closing";
 
 export function Tracker({ initialCapture }: Props) {
   const router = useRouter();
@@ -27,14 +34,37 @@ export function Tracker({ initialCapture }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [debug, setDebug] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [sheetPhase, setSheetPhase] = useState<SheetPhase>("closed");
   const [, startTransition] = useTransition();
   const capStopFiredRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (sheetPhase === "opening") {
+      const r = requestAnimationFrame(() => setSheetPhase("open"));
+      return () => cancelAnimationFrame(r);
+    }
+    if (sheetPhase === "closing") {
+      const t = setTimeout(() => setSheetPhase("closed"), 200);
+      return () => clearTimeout(t);
+    }
+  }, [sheetPhase]);
+
+  const openSheet = () => setSheetPhase("opening");
+  const closeSheet = () => setSheetPhase("closing");
 
   const stage: CaptureStage = !capture ? "idle" : capture.endedAt ? "finished" : "running";
   const activity = ACTIVITIES.find((a) => a.id === activeId)!;
   const accent = activity.accent;
   const sessionActivity: ActivityId = capture?.activity ?? activeId;
   const sessionCap = ACTIVITY_CAPS[sessionActivity];
+
+  const stripVisible = ACTIVITIES.slice(0, 3);
+  const stripHidden = ACTIVITIES.slice(3);
+  const overflowActive = stripHidden.find((a) => a.id === activeId);
+  const strip: readonly Activity[] = overflowActive
+    ? [stripVisible[0], stripVisible[1], overflowActive]
+    : stripVisible;
+  const selectorLocked = stage !== "idle";
 
   useEffect(() => {
     if (stage !== "running") return;
@@ -182,13 +212,12 @@ export function Tracker({ initialCapture }: Props) {
   const endedAt = capture?.endedAt ?? null;
 
   return (
-    <div className="flex flex-1 flex-col">
-      {/* Activity selector */}
+    <div className="relative flex flex-1 flex-col overflow-hidden">
+      {/* Activity selector — 3 inline tiles + ⋯ overflow (opens sheet) */}
       <div className="flex border-b-2 border-ink">
-        {ACTIVITIES.map((a, i) => {
+        {strip.map((a) => {
           const sel = a.id === activeId;
-          const disabled = stage !== "idle" || !a.enabled;
-          const isLast = i === ACTIVITIES.length - 1;
+          const disabled = selectorLocked || !a.enabled;
           return (
             <ReliableButton
               key={a.id}
@@ -200,7 +229,7 @@ export function Tracker({ initialCapture }: Props) {
                 background: sel ? a.accent : "var(--color-bg)",
                 color: sel ? (a.contrast ? "var(--color-bg)" : "var(--color-ink)") : "var(--color-ink)",
                 opacity: !a.enabled && !sel ? 0.32 : 1,
-                borderRight: isLast ? "none" : "2px solid var(--color-ink)",
+                borderRight: "2px solid var(--color-ink)",
                 touchAction: "manipulation",
               }}
             >
@@ -208,6 +237,20 @@ export function Tracker({ initialCapture }: Props) {
             </ReliableButton>
           );
         })}
+        <ReliableButton
+          type="button"
+          disabled={selectorLocked}
+          onPress={openSheet}
+          aria-label="All activities"
+          className="w-[54px] shrink-0 px-[6px] py-[14px] text-[16px] font-bold tracking-[2px] disabled:cursor-default"
+          style={{
+            background: "var(--color-bg)",
+            color: "var(--color-ink)",
+            touchAction: "manipulation",
+          }}
+        >
+          ⋯
+        </ReliableButton>
       </div>
 
       {/* Hero timer */}
@@ -294,6 +337,200 @@ export function Tracker({ initialCapture }: Props) {
             ▸ {debug}
           </p>
         )}
+      </div>
+
+      {sheetPhase !== "closed" && (
+        <ActivitySheet
+          activities={ACTIVITIES}
+          activeId={activeId}
+          shown={sheetPhase === "open"}
+          onPick={(id) => {
+            setActiveId(id);
+            closeSheet();
+          }}
+          onClose={closeSheet}
+        />
+      )}
+    </div>
+  );
+}
+
+function ShapeMarker({
+  shape,
+  fill,
+  borderColor,
+  size = 16,
+}: {
+  shape: Shape;
+  fill: string;
+  borderColor: string;
+  size?: number;
+}) {
+  if (shape === "triangle") {
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 14 14"
+        style={{ overflow: "visible", flexShrink: 0 }}
+        aria-hidden="true"
+      >
+        <polygon
+          points="7,1 13,12 1,12"
+          fill={fill}
+          stroke={borderColor}
+          strokeWidth={2}
+          strokeLinejoin="miter"
+        />
+      </svg>
+    );
+  }
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        width: size,
+        height: size,
+        background: fill,
+        border: `2px solid ${borderColor}`,
+        transform: shape === "diamond" ? "rotate(45deg)" : "none",
+        borderRadius: shape === "circle" ? "50%" : 0,
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+function ActivitySheet({
+  activities,
+  activeId,
+  shown,
+  onPick,
+  onClose,
+}: {
+  activities: readonly Activity[];
+  activeId: ActivityId;
+  shown: boolean;
+  onPick: (id: ActivityId) => void;
+  onClose: () => void;
+}) {
+  const spanFull = activities.length % 2 === 0;
+  return (
+    <div
+      className="absolute inset-0 z-50 flex flex-col justify-end"
+      style={{
+        background: "rgba(10, 10, 10, 0.32)",
+        opacity: shown ? 1 : 0,
+        transition: "opacity 150ms ease-out",
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="border-t-2 border-ink"
+        style={{
+          background: "var(--color-bg)",
+          boxShadow: "0 -6px 0 var(--color-ink)",
+          transform: shown ? "translateY(0)" : "translateY(100%)",
+          transition: "transform 200ms ease-out",
+          paddingBottom: "calc(14px + env(safe-area-inset-bottom))",
+        }}
+      >
+        {/* Sheet header */}
+        <div
+          className="flex items-center justify-between border-b-2 border-ink"
+          style={{ padding: "14px 18px 10px" }}
+        >
+          <div className="text-[9px] font-bold tracking-[2.4px] text-dim">
+            ▸ ALL ACTIVITIES · {activities.length}
+          </div>
+          <ReliableButton
+            type="button"
+            onPress={onClose}
+            className="border-2 border-ink text-[10px] font-bold tracking-[1.5px]"
+            style={{
+              background: "var(--color-bg)",
+              color: "var(--color-ink)",
+              padding: "4px 10px",
+              touchAction: "manipulation",
+            }}
+          >
+            CLOSE
+          </ReliableButton>
+        </div>
+
+        {/* Grid */}
+        <div className="grid grid-cols-2">
+          {activities.map((a, i) => {
+            const sel = a.id === activeId;
+            const inRightCol = i % 2 === 1;
+            return (
+              <ReliableButton
+                key={a.id}
+                type="button"
+                onPress={() => onPick(a.id as ActivityId)}
+                className="relative flex items-center gap-3 text-left text-[13px] font-bold uppercase tracking-[1px]"
+                style={{
+                  padding: "16px 18px",
+                  borderRight: inRightCol ? "none" : "2px solid var(--color-ink)",
+                  borderBottom: "2px solid var(--color-ink)",
+                  background: sel ? "var(--color-ink)" : "var(--color-bg)",
+                  color: sel ? "var(--color-bg)" : "var(--color-ink)",
+                  touchAction: "manipulation",
+                }}
+              >
+                {sel && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute left-0 top-0 bottom-0 w-[5px]"
+                    style={{ background: a.accent }}
+                  />
+                )}
+                <ShapeMarker
+                  shape={a.shape}
+                  fill={a.accent}
+                  borderColor={sel ? "var(--color-bg)" : "var(--color-ink)"}
+                  size={16}
+                />
+                <span className="flex-1">{a.label.toUpperCase()}</span>
+              </ReliableButton>
+            );
+          })}
+          {/* + NEW ACTIVITY (future) */}
+          <div
+            className="flex items-center gap-3 text-[11px] font-bold uppercase tracking-[1.5px]"
+            style={{
+              padding: "16px 18px",
+              borderRight: spanFull ? "none" : "2px solid var(--color-ink)",
+              borderBottom: "2px solid var(--color-ink)",
+              background: "var(--color-bg)",
+              color: "var(--color-ink)",
+              gridColumn: spanFull ? "1 / -1" : "auto",
+              opacity: 0.45,
+            }}
+          >
+            <div
+              aria-hidden="true"
+              className="flex items-center justify-center text-[12px] font-bold"
+              style={{
+                width: 16,
+                height: 16,
+                border: "2px dashed var(--color-ink)",
+              }}
+            >
+              +
+            </div>
+            <span className="flex-1">NEW ACTIVITY</span>
+          </div>
+        </div>
+
+        {/* Hint footer */}
+        <div
+          className="text-[9px] font-bold tracking-[2px] text-dim"
+          style={{ padding: "12px 18px 4px" }}
+        >
+          LONG-PRESS ANY TILE TO EDIT · REORDER
+        </div>
       </div>
     </div>
   );
