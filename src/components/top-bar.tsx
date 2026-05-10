@@ -21,7 +21,7 @@ export function TopBar() {
           {BUILD_SHA}
         </span>
         <span className="text-[10px] tabular-nums text-dim">
-          {now ? formatClock(now) : "—:—:—"}
+          {now ? formatClock(now) : "--:--:--"}
         </span>
       </div>
     </header>

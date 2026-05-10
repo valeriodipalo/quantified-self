@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import type { ButtonHTMLAttributes, TouchEvent } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { ActivityId, CaptureState, CaptureStage } from "@/lib/session";
 
@@ -118,11 +119,11 @@ export function Tracker({ initialCapture }: Props) {
           const disabled = stage !== "idle" || !a.enabled;
           const isLast = i === ACTIVITIES.length - 1;
           return (
-            <button
+            <ReliableButton
               key={a.id}
               type="button"
               disabled={disabled}
-              onClick={() => setActiveId(a.id as ActivityId)}
+              onPress={() => setActiveId(a.id as ActivityId)}
               className="flex-1 px-[6px] py-[14px] text-[11px] font-bold uppercase tracking-[2px] disabled:cursor-default"
               style={{
                 background: sel ? a.accent : "var(--color-bg)",
@@ -133,7 +134,7 @@ export function Tracker({ initialCapture }: Props) {
               }}
             >
               {a.label}
-            </button>
+            </ReliableButton>
           );
         })}
       </div>
@@ -179,7 +180,7 @@ export function Tracker({ initialCapture }: Props) {
       </div>
 
       {/* Big action button */}
-      <div className="px-[18px] pt-6 pb-12">
+      <div className="px-[18px] pt-6 pb-[calc(3rem+env(safe-area-inset-bottom))]">
         <div className="flex gap-3">
           <ActionButton
             stage={stage}
@@ -279,9 +280,9 @@ function ActionButton({
   const tracking = isSend ? "5px" : "6px";
 
   return (
-    <button
+    <ReliableButton
       type="button"
-      onClick={onClick}
+      onPress={onClick}
       disabled={busy}
       className="flex-1 h-[84px] text-[22px] font-bold uppercase border-2 border-ink disabled:opacity-60 disabled:cursor-default"
       style={{
@@ -293,7 +294,7 @@ function ActionButton({
       }}
     >
       {busy ? "…" : label}
-    </button>
+    </ReliableButton>
   );
 }
 
@@ -313,9 +314,9 @@ function DiscardButton({
   const shadowColor = contrast ? "var(--color-reading)" : "var(--color-ink)";
 
   return (
-    <button
+    <ReliableButton
       type="button"
-      onClick={onClick}
+      onPress={onClick}
       disabled={busy}
       aria-label="Discard"
       className="h-[84px] w-[84px] shrink-0 text-[28px] font-bold uppercase border-2 border-ink disabled:opacity-60 disabled:cursor-default"
@@ -327,7 +328,64 @@ function DiscardButton({
       }}
     >
       {busy ? "…" : "X"}
-    </button>
+    </ReliableButton>
+  );
+}
+
+type ReliableButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> & {
+  onPress: () => void;
+};
+
+const TAP_MOVE_TOLERANCE_PX = 12;
+
+function ReliableButton({
+  onPress,
+  disabled,
+  onTouchStart,
+  onTouchEnd,
+  ...props
+}: ReliableButtonProps) {
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const lastTouchPressRef = useRef(0);
+
+  const handleTouchStart = (event: TouchEvent<HTMLButtonElement>) => {
+    onTouchStart?.(event);
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleTouchEnd = (event: TouchEvent<HTMLButtonElement>) => {
+    onTouchEnd?.(event);
+    if (event.defaultPrevented || disabled) return;
+
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!start || !touch) return;
+
+    const moved =
+      Math.abs(touch.clientX - start.x) > TAP_MOVE_TOLERANCE_PX ||
+      Math.abs(touch.clientY - start.y) > TAP_MOVE_TOLERANCE_PX;
+    if (moved) return;
+
+    lastTouchPressRef.current = Date.now();
+    event.preventDefault();
+    event.currentTarget.blur();
+    onPress();
+  };
+
+  return (
+    <button
+      {...props}
+      disabled={disabled}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onClick={() => {
+        if (Date.now() - lastTouchPressRef.current < 700) return;
+        onPress();
+      }}
+    />
   );
 }
 

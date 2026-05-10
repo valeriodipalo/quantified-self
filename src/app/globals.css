@@ -18,6 +18,18 @@ body {
   color: var(--color-ink);
 }
 
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  appearance: none;
+  border-radius: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
 @keyframes qsBlink {
   0%,
   100% {
