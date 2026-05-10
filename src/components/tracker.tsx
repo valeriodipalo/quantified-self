@@ -26,6 +26,7 @@ export function Tracker({ initialCapture }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [debug, setDebug] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState("");
   const [, startTransition] = useTransition();
   const capStopFiredRef = useRef<number | null>(null);
 
@@ -99,12 +100,53 @@ export function Tracker({ initialCapture }: Props) {
   const handleStop = () =>
     callApi("stop", "/api/sessions/stop", null, (d) => setCapture(d.capture));
   const handleSend = () =>
-    callApi("send", "/api/sessions/send", null, () => {
+    callApi("send", "/api/sessions/send", { feedback: feedback.trim() }, () => {
       setCapture(null);
+      setFeedback("");
       startTransition(() => router.refresh());
     });
   const handleDiscard = () =>
-    callApi("discard", "/api/sessions/discard", null, () => setCapture(null));
+    callApi("discard", "/api/sessions/discard", null, () => {
+      setCapture(null);
+      setFeedback("");
+    });
+
+  const handleAutoCap = async () => {
+    setBusy(true);
+    setError(null);
+    setDebug("auto-cap · stop…");
+    try {
+      const stopRes = await fetch("/api/sessions/stop", { method: "POST" });
+      const stopData: { capture?: CaptureState | null; error?: string } =
+        await stopRes.json().catch(() => ({}));
+      if (!stopRes.ok) {
+        throw new Error(stopData?.error || `stop http ${stopRes.status}`);
+      }
+      setCapture(stopData.capture ?? null);
+      setDebug("auto-cap · send…");
+      const sendRes = await fetch("/api/sessions/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: "" }),
+      });
+      const sendData: { error?: string } = await sendRes
+        .json()
+        .catch(() => ({}));
+      if (!sendRes.ok) {
+        throw new Error(sendData?.error || `send http ${sendRes.status}`);
+      }
+      setDebug("auto-cap · sent");
+      setCapture(null);
+      setFeedback("");
+      startTransition(() => router.refresh());
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "unknown";
+      setError(msg);
+      setDebug(`auto-cap · err · ${msg}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (stage !== "running" || !capture) {
@@ -118,9 +160,9 @@ export function Tracker({ initialCapture }: Props) {
       !busy
     ) {
       capStopFiredRef.current = capture.startedAt;
-      handleStop();
+      handleAutoCap();
     }
-    // handleStop identity changes each render but its behaviour is invariant;
+    // handleAutoCap identity changes each render but its behaviour is invariant;
     // we intentionally exclude it from deps to avoid re-firing on every tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, capture, sessionCap, elapsedMs, busy]);
@@ -211,6 +253,24 @@ export function Tracker({ initialCapture }: Props) {
 
       {/* Big action button */}
       <div className="px-[18px] pt-6 pb-[calc(3rem+env(safe-area-inset-bottom))]">
+        {stage === "finished" && (
+          <textarea
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder="how did it go? (optional)"
+            rows={2}
+            maxLength={4000}
+            disabled={busy}
+            className="w-full mb-4 p-3 text-[16px] font-medium border-2 border-ink resize-none focus:outline-none placeholder:text-dim disabled:opacity-60"
+            style={{
+              background: "var(--color-bg)",
+              color: "var(--color-ink)",
+              caretColor: accent,
+              letterSpacing: "0.3px",
+              boxShadow: `4px 4px 0 var(--color-ink)`,
+            }}
+          />
+        )}
         <div className="flex gap-3">
           <ActionButton
             stage={stage}
