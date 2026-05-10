@@ -4,6 +4,7 @@ import type { ButtonHTMLAttributes, TouchEvent } from "react";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { ActivityId, CaptureState, CaptureStage } from "@/lib/session";
+import { ACTIVITY_CAPS } from "@/lib/activity-caps";
 
 interface Props {
   initialCapture: CaptureState | null;
@@ -11,7 +12,7 @@ interface Props {
 
 const ACTIVITIES = [
   { id: "reading", label: "Reading", accent: "var(--color-reading)", contrast: false, enabled: true },
-  { id: "meditation", label: "Meditation", accent: "var(--color-meditation)", contrast: false, enabled: false },
+  { id: "meditation", label: "Meditation", accent: "var(--color-meditation)", contrast: true, enabled: true },
   { id: "smoking", label: "Smoking", accent: "var(--color-smoking)", contrast: true, enabled: true },
 ] as const;
 
@@ -26,10 +27,13 @@ export function Tracker({ initialCapture }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [debug, setDebug] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+  const capStopFiredRef = useRef<number | null>(null);
 
   const stage: CaptureStage = !capture ? "idle" : capture.endedAt ? "finished" : "running";
   const activity = ACTIVITIES.find((a) => a.id === activeId)!;
   const accent = activity.accent;
+  const sessionActivity: ActivityId = capture?.activity ?? activeId;
+  const sessionCap = ACTIVITY_CAPS[sessionActivity];
 
   useEffect(() => {
     if (stage !== "running") return;
@@ -44,6 +48,12 @@ export function Tracker({ initialCapture }: Props) {
       : stage === "finished" && capture && capture.endedAt
       ? capture.endedAt - capture.startedAt
       : 0;
+
+  const willCap =
+    stage === "finished" && !!sessionCap && elapsedMs >= sessionCap.thresholdMs;
+  const cappedMinutes = sessionCap
+    ? Math.round(sessionCap.cappedMs / 60_000)
+    : 0;
 
   const callApi = async (
     label: string,
@@ -96,6 +106,25 @@ export function Tracker({ initialCapture }: Props) {
   const handleDiscard = () =>
     callApi("discard", "/api/sessions/discard", null, () => setCapture(null));
 
+  useEffect(() => {
+    if (stage !== "running" || !capture) {
+      capStopFiredRef.current = null;
+      return;
+    }
+    if (!sessionCap) return;
+    if (
+      elapsedMs >= sessionCap.thresholdMs &&
+      capStopFiredRef.current !== capture.startedAt &&
+      !busy
+    ) {
+      capStopFiredRef.current = capture.startedAt;
+      handleStop();
+    }
+    // handleStop identity changes each render but its behaviour is invariant;
+    // we intentionally exclude it from deps to avoid re-firing on every tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, capture, sessionCap, elapsedMs, busy]);
+
   const handleAction = () => {
     setDebug(`tap · ${stage}`);
     const fn = stage === "idle" ? handleStart : stage === "running" ? handleStop : handleSend;
@@ -144,7 +173,8 @@ export function Tracker({ initialCapture }: Props) {
         <div className="text-[9px] font-bold tracking-[2.4px] mb-1.5">
           {stage === "idle" && "○ READY — TAP TO START"}
           {stage === "running" && "● RECORDING"}
-          {stage === "finished" && "■ COMPLETE — REVIEW"}
+          {stage === "finished" &&
+            (willCap ? `■ CAPPED — ${cappedMinutes} MIN` : "■ COMPLETE — REVIEW")}
         </div>
 
         <HeroTimer ms={elapsedMs} accent={accent} />

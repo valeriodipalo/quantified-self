@@ -1,6 +1,6 @@
 import type { SessionOptions } from "iron-session";
 
-export type ActivityId = "reading" | "smoking";
+export type ActivityId = "reading" | "smoking" | "meditation";
 
 export interface CaptureState {
   startedAt: number;
