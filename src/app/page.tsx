@@ -3,6 +3,11 @@ import { cookies } from "next/headers";
 import { sessionOptions, SessionData } from "@/lib/session";
 import { TopBar } from "@/components/top-bar";
 import { Tracker } from "@/components/tracker";
+import { StandaloneAuthHint } from "@/components/standalone-auth-hint";
+import {
+  AuthRefreshOnReturn,
+  RefreshAuthButton,
+} from "@/components/auth-refresh-on-return";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +42,7 @@ export default async function Home({
 function SignedOut() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-[18px] gap-8">
+      <AuthRefreshOnReturn />
       <div className="text-center">
         <div className="text-[9px] font-bold tracking-[2.4px] text-dim">
           ○ AUTH REQUIRED
@@ -45,6 +51,7 @@ function SignedOut() {
           Authorize Google Calendar to start logging sessions.
         </div>
       </div>
+      <StandaloneAuthHint />
       <a
         href="/api/auth/google"
         className="flex h-[84px] w-full items-center justify-center border-2 border-ink bg-reading text-[22px] font-bold uppercase tracking-[5px] text-ink"
@@ -52,6 +59,7 @@ function SignedOut() {
       >
         SIGN IN
       </a>
+      <RefreshAuthButton />
     </div>
   );
 }

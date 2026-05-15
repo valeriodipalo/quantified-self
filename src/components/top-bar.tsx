@@ -14,7 +14,10 @@ export function TopBar() {
   }, []);
 
   return (
-    <header className="flex items-center justify-between border-b-2 border-ink px-[18px] py-3">
+    <header
+      className="flex items-center justify-between border-b-2 border-ink px-[18px] pb-3"
+      style={{ paddingTop: "calc(0.75rem + env(safe-area-inset-top))" }}
+    >
       <span className="text-[10px] font-bold tracking-[2px]">QUANTIFIED.SELF</span>
       <div className="flex items-center gap-2">
         <span className="text-[9px] font-bold tabular-nums tracking-[1.5px] text-faint">

@@ -1,7 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ErrorReporter } from "@/components/error-reporter";
+import { ServiceWorkerRegister } from "@/components/service-worker-register";
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-mono",
@@ -19,9 +20,10 @@ export const metadata: Metadata = {
   },
 };
 
-export const viewport = {
+export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
   themeColor: "#ff5b1f",
 };
 
@@ -34,6 +36,7 @@ export default function RootLayout({
     <html lang="en" className={`${jetbrainsMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col bg-bg text-ink font-mono">
         <ErrorReporter />
+        <ServiceWorkerRegister />
         {children}
       </body>
     </html>
