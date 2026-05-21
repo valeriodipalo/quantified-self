@@ -5,7 +5,7 @@ import { sessionOptions, SessionData, ActivityId, captureStage } from "@/lib/ses
 import { applyCap } from "@/lib/activity-caps";
 import { refreshAccessToken } from "@/lib/google/oauth";
 import { createCalendarEvent } from "@/lib/google/calendar";
-import { logSession } from "@/lib/supabase";
+import { logSession, findPackContaining } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +16,13 @@ const ACTIVITY_CONFIG: Record<ActivityId, { summary: string; calendarEnv: string
   music: { summary: "Music", calendarEnv: "GOOGLE_MUSIC_CALENDAR_ID" },
 };
 
-const FEEDBACK_MAX_LEN = 4000;
+const NOTE_MAX_LEN = 4000;
+
+function clipNote(input: unknown): string | null | undefined {
+  if (typeof input !== "string") return undefined;
+  const trimmed = input.trim().slice(0, NOTE_MAX_LEN);
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 export async function POST(request: Request) {
   const session = await getIronSession<SessionData>(await cookies(), sessionOptions);
@@ -28,16 +34,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "no finished session to send" }, { status: 409 });
   }
 
-  let feedback: string | null = null;
+  // Body may override either field. `undefined` from clipNote means "field
+  // not present in body" → fall back to what was captured at /start.
+  let bodyFeedback: string | null | undefined;
+  let bodyStartNote: string | null | undefined;
   try {
-    const body = (await request.json()) as { feedback?: unknown };
-    if (typeof body?.feedback === "string") {
-      const trimmed = body.feedback.trim().slice(0, FEEDBACK_MAX_LEN);
-      feedback = trimmed.length > 0 ? trimmed : null;
-    }
+    const body = (await request.json()) as { feedback?: unknown; startNote?: unknown };
+    bodyFeedback = clipNote(body?.feedback);
+    bodyStartNote = clipNote(body?.startNote);
   } catch {
-    // No body — fine, feedback stays null.
+    // No body — both stay undefined, no override.
   }
+
+  const feedback: string | null = bodyFeedback !== undefined ? bodyFeedback : null;
+  const startNote: string | null =
+    bodyStartNote !== undefined ? bodyStartNote : session.capture!.startNote ?? null;
 
   let accessToken = session.accessToken;
   const expiresAt = session.accessTokenExpiresAt ?? 0;
@@ -66,9 +77,13 @@ export async function POST(request: Request) {
   const end = new Date(endedAt);
   const durationMs = endedAt - startedAt;
   const durationMin = Math.round(durationMs / 60000);
+
+  const noteBlocks: string[] = [];
+  if (startNote) noteBlocks.push(`note: ${startNote}`);
+  if (feedback) noteBlocks.push(feedback);
   const description =
     `Tracked via Quantified Self · ${durationMin} min${capped ? " (capped)" : ""}` +
-    (feedback ? `\n\n${feedback}` : "");
+    (noteBlocks.length ? `\n\n${noteBlocks.join("\n\n")}` : "");
 
   const event = await createCalendarEvent({
     accessToken: accessToken as string,
@@ -82,8 +97,16 @@ export async function POST(request: Request) {
   session.capture = undefined;
   await session.save();
 
-  // Log to Supabase. Don't fail the request if this errors — the calendar
-  // event is already created and that's the user-visible commit.
+  // Smoking only: link the session to whichever pack was open at started_at.
+  // Best-effort — a lookup failure leaves pack_id null and doesn't fail SEND.
+  let packId: string | null = null;
+  if (activity === "smoking") {
+    const pack = await findPackContaining(start.toISOString());
+    packId = pack?.id ?? null;
+  }
+
+  // Don't fail the request if Supabase logging errors — the calendar event
+  // is already created and that's the user-visible commit.
   const logResult = await logSession({
     activity,
     started_at: start.toISOString(),
@@ -91,6 +114,9 @@ export async function POST(request: Request) {
     duration_ms: durationMs,
     capped,
     feedback,
+    start_note: startNote,
+    backdated: false,
+    pack_id: packId,
     google_event_id: event.id ?? null,
     google_calendar_id: calendarId,
   });
@@ -102,6 +128,7 @@ export async function POST(request: Request) {
     event: { id: event.id, htmlLink: event.htmlLink },
     durationMs,
     capped,
+    packId,
     logged: logResult.ok,
   });
 }

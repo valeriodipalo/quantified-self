@@ -6,6 +6,7 @@ export interface CaptureState {
   startedAt: number;
   endedAt?: number;
   activity?: ActivityId;
+  startNote?: string;
 }
 
 export interface SessionData {

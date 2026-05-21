@@ -8,6 +8,7 @@ import {
   AuthRefreshOnReturn,
   RefreshAuthButton,
 } from "@/components/auth-refresh-on-return";
+import { countSessionsForPack, getCurrentSmokingPack } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,11 @@ export default async function Home({
   const params = await searchParams;
   const signedIn = Boolean(session.refreshToken);
 
+  // Pack is global per user (one open pack at a time). Fetched server-side so
+  // the smoking sub-strip paints with real state on first load.
+  const pack = signedIn ? await getCurrentSmokingPack() : null;
+  const smokedCount = pack ? await countSessionsForPack(pack.id) : 0;
+
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-[430px] flex-col">
       <TopBar />
@@ -31,7 +37,11 @@ export default async function Home({
       )}
 
       {signedIn ? (
-        <Tracker initialCapture={session.capture ?? null} />
+        <Tracker
+          initialCapture={session.capture ?? null}
+          initialSmokingPack={pack}
+          initialSmokedCount={smokedCount}
+        />
       ) : (
         <SignedOut />
       )}
