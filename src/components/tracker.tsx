@@ -6,6 +6,7 @@ import type { ActivityId, CaptureState, CaptureStage } from "@/lib/session";
 import { ACTIVITY_CAPS } from "@/lib/activity-caps";
 import { ReliableButton } from "@/components/reliable-button";
 import type { SmokingPackRow } from "@/lib/supabase";
+import { SmokingLog } from "@/components/smoking-log";
 
 interface Props {
   initialCapture: CaptureState | null;
@@ -60,6 +61,8 @@ export function Tracker({
   } | null>(null);
   const [, startTransition] = useTransition();
   const capStopFiredRef = useRef<number | null>(null);
+  const [lastSmokingEnd, setLastSmokingEnd] = useState<string | null>(null);
+  const [view, setView] = useState<"track" | "log">("track");
 
   useEffect(() => {
     if (sheetPhase === "opening") {
@@ -167,6 +170,16 @@ export function Tracker({
     }
   };
 
+  const refreshLastCig = async () => {
+    try {
+      const res = await fetch("/api/smoking/last-session");
+      if (res.ok) {
+        const data = await res.json();
+        setLastSmokingEnd(data.endedAt);
+      }
+    } catch {}
+  };
+
   const handleStart = async () => {
     const body: Record<string, unknown> = { activity: activeId };
     const trimmed = startNote.trim();
@@ -204,7 +217,10 @@ export function Tracker({
       setCapture(null);
       setStartNote("");
       setFeedback("");
-      if (sessionActivity === "smoking") await refreshPack();
+      if (sessionActivity === "smoking") {
+        await refreshPack();
+        await refreshLastCig();
+      }
       startTransition(() => router.refresh());
     }
   };
@@ -254,7 +270,10 @@ export function Tracker({
       setCapture(null);
       setStartNote("");
       setFeedback("");
-      if (sessionActivity === "smoking") await refreshPack();
+      if (sessionActivity === "smoking") {
+        await refreshPack();
+        await refreshLastCig();
+      }
       startTransition(() => router.refresh());
     } catch (e) {
       const msg = e instanceof Error ? e.message : "unknown";
@@ -283,6 +302,20 @@ export function Tracker({
     // intentionally excluded from deps to avoid re-firing on every tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, capture, sessionCap, elapsedMs, busy]);
+
+  useEffect(() => {
+    if (!isSmoking) return;
+    let cancelled = false;
+    fetch("/api/smoking/last-session")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d) setLastSmokingEnd(d.endedAt);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isSmoking]);
 
   // ─── pack actions ────────────────────────────────────────────────────────
 
@@ -337,7 +370,10 @@ export function Tracker({
       feedback: input.feedback.trim() || undefined,
     });
     if (data) {
-      if (activeId === "smoking") await refreshPack();
+      if (activeId === "smoking") {
+        await refreshPack();
+        await refreshLastCig();
+      }
       closeSheet();
       startTransition(() => router.refresh());
     }
@@ -399,6 +435,8 @@ export function Tracker({
         </ReliableButton>
       </div>
 
+      {view === "track" || !isSmoking ? (
+      <>
       {/* Smoking sub-strip: small log-past link (left) + pack chip (right) */}
       {isSmoking && (
         <div
@@ -423,6 +461,14 @@ export function Tracker({
             busy={busy}
             onTap={() => openSheet("pack")}
           />
+        </div>
+      )}
+      {isSmoking && lastSmokingEnd && (
+        <div
+          className="border-b-2 border-ink"
+          style={{ padding: "6px 18px" }}
+        >
+          <LastCigBadge endedAt={lastSmokingEnd} />
         </div>
       )}
 
@@ -468,7 +514,7 @@ export function Tracker({
       </div>
 
       {/* Notes + action button */}
-      <div className="px-[18px] pt-5 pb-[calc(3rem+env(safe-area-inset-bottom))]">
+      <div className="px-[18px] pt-5" style={{ paddingBottom: isSmoking ? "3rem" : "calc(3rem + env(safe-area-inset-bottom))" }}>
         {/* Start-note textarea: available during idle and running */}
         {stage !== "finished" && (
           <textarea
@@ -537,6 +583,44 @@ export function Tracker({
           </p>
         )}
       </div>
+      </>
+      ) : (
+        <SmokingLog />
+      )}
+
+      {/* Bottom tab bar — smoking only */}
+      {isSmoking && (
+        <div
+          className="shrink-0 flex border-t-2 border-ink"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        >
+          <ReliableButton
+            type="button"
+            onPress={() => setView("track")}
+            className="flex-1 py-3 text-[10px] font-bold uppercase tracking-[2px]"
+            style={{
+              background: view === "track" ? "var(--color-ink)" : "var(--color-bg)",
+              color: view === "track" ? "var(--color-bg)" : "var(--color-ink)",
+              borderRight: "2px solid var(--color-ink)",
+              touchAction: "manipulation",
+            }}
+          >
+            TRACK
+          </ReliableButton>
+          <ReliableButton
+            type="button"
+            onPress={() => setView("log")}
+            className="flex-1 py-3 text-[10px] font-bold uppercase tracking-[2px]"
+            style={{
+              background: view === "log" ? "var(--color-ink)" : "var(--color-bg)",
+              color: view === "log" ? "var(--color-bg)" : "var(--color-ink)",
+              touchAction: "manipulation",
+            }}
+          >
+            LOG
+          </ReliableButton>
+        </div>
+      )}
 
       {sheetPhase !== "closed" && sheet === "all-activities" && (
         <ActivitySheet
@@ -1308,6 +1392,32 @@ function DiscardButton({
     >
       {busy ? "…" : "X"}
     </ReliableButton>
+  );
+}
+
+// ─── last-cig badge ────────────────────────────────────────────────────
+
+function LastCigBadge({ endedAt }: { endedAt: string }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, [endedAt]);
+
+  const ms = now - new Date(endedAt).getTime();
+  const hours = ms / 3_600_000;
+  const color =
+    hours < 1 ? "#FF3B30" : hours < 1.5 ? "#CC8800" : "#34C759";
+
+  return (
+    <div
+      className="text-[10px] font-bold tracking-[1.5px] tabular-nums text-center"
+      style={{ color }}
+    >
+      LAST CIG · {formatElapsed(ms)} AGO
+    </div>
   );
 }
 

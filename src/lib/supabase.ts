@@ -151,6 +151,125 @@ export async function findPackContaining(timestamp: string): Promise<SmokingPack
   return (data as SmokingPackRow | null) ?? null;
 }
 
+export async function getLastSmokingSessionEnd(): Promise<string | null> {
+  const client = getSupabaseAdmin();
+  if (!client) return null;
+  const { data, error } = await client
+    .from("sessions")
+    .select("ended_at")
+    .eq("activity", "smoking")
+    .order("ended_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[sessions] getLastSmokingEnd:", error.message);
+    return null;
+  }
+  return (data as { ended_at: string } | null)?.ended_at ?? null;
+}
+
+// ─── smoking analytics ─────────────────────────────────────────────────
+
+export async function getSmokingDayCounts(
+  from: string,
+  to: string,
+): Promise<Array<{ date: string; count: number }>> {
+  const client = getSupabaseAdmin();
+  if (!client) return [];
+  const { data, error } = await client
+    .from("sessions")
+    .select("started_at")
+    .eq("activity", "smoking")
+    .gte("started_at", `${from}T00:00:00Z`)
+    .lte("started_at", `${to}T23:59:59Z`)
+    .order("started_at", { ascending: true });
+  if (error || !data) {
+    if (error) console.error("[sessions] dayCounts:", error.message);
+    return [];
+  }
+  const map = new Map<string, number>();
+  for (const row of data as Array<{ started_at: string }>) {
+    const day = row.started_at.slice(0, 10);
+    map.set(day, (map.get(day) ?? 0) + 1);
+  }
+  return Array.from(map, ([date, count]) => ({ date, count }));
+}
+
+export interface SmokingSessionRow {
+  id: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  backdated: boolean;
+  pack_id: string | null;
+  start_note: string | null;
+  feedback: string | null;
+}
+
+export async function getSmokingSessions(opts: {
+  date?: string;
+  limit?: number;
+}): Promise<SmokingSessionRow[]> {
+  const client = getSupabaseAdmin();
+  if (!client) return [];
+  let query = client
+    .from("sessions")
+    .select("id, started_at, ended_at, duration_ms, backdated, pack_id, start_note, feedback")
+    .eq("activity", "smoking")
+    .order("started_at", { ascending: false });
+  if (opts.date) {
+    query = query
+      .gte("started_at", `${opts.date}T00:00:00Z`)
+      .lte("started_at", `${opts.date}T23:59:59Z`);
+  }
+  query = query.limit(opts.limit ?? 50);
+  const { data, error } = await query;
+  if (error || !data) {
+    if (error) console.error("[sessions] smokingSessions:", error.message);
+    return [];
+  }
+  return data as SmokingSessionRow[];
+}
+
+export interface SmokingPackStat {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  cigarette_count: number | null;
+  tracked_count: number;
+  note: string | null;
+  duration_hours: number | null;
+}
+
+export async function getSmokingPackStats(
+  limit: number = 10,
+): Promise<SmokingPackStat[]> {
+  const client = getSupabaseAdmin();
+  if (!client) return [];
+  const { data: packs, error } = await client
+    .from("smoking_packs")
+    .select("id, started_at, finished_at, cigarette_count, note")
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  if (error || !packs || packs.length === 0) {
+    if (error) console.error("[smoking_packs] packStats:", error.message);
+    return [];
+  }
+  return Promise.all(
+    (packs as Array<Omit<SmokingPackStat, "tracked_count" | "duration_hours">>).map(
+      async (pack) => {
+        const tracked_count = await countSessionsForPack(pack.id);
+        const duration_hours = pack.finished_at
+          ? (new Date(pack.finished_at).getTime() -
+              new Date(pack.started_at).getTime()) /
+            3_600_000
+          : null;
+        return { ...pack, tracked_count, duration_hours };
+      },
+    ),
+  );
+}
+
 export async function countSessionsForPack(packId: string): Promise<number> {
   const client = getSupabaseAdmin();
   if (!client) return 0;
