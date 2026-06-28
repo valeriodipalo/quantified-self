@@ -74,6 +74,7 @@ export function SmokingLog() {
         selectedDate={selectedDate}
         onSelect={setSelectedDate}
       />
+      <TrendChart days={dayCounts} />
       <Timeline
         date={selectedDate}
         sessions={sessions}
@@ -91,12 +92,18 @@ const CELL = 16;
 const GAP = 2;
 const LABEL_W = 20;
 
-function heatOpacity(count: number): number {
-  if (count === 0) return 0.06;
-  if (count <= 2) return 0.22;
-  if (count <= 5) return 0.42;
-  if (count <= 9) return 0.65;
-  return 0.9;
+const HEAT_RED = "255,59,48"; // shades of red — darker = more cigarettes
+const GREEN = "#34C759";
+const RED = "#FF3B30";
+
+// Empty days stay a neutral hairline; any logged day takes a red tone whose
+// depth scales with the count.
+function heatColor(count: number): string {
+  if (count <= 0) return "rgba(10,10,10,0.05)";
+  if (count <= 2) return `rgba(${HEAT_RED},0.30)`;
+  if (count <= 5) return `rgba(${HEAT_RED},0.52)`;
+  if (count <= 9) return `rgba(${HEAT_RED},0.74)`;
+  return `rgba(${HEAT_RED},0.95)`;
 }
 
 function Heatmap({
@@ -214,11 +221,9 @@ function Heatmap({
                 style={{
                   width: CELL,
                   height: CELL,
-                  background: cell
-                    ? `rgba(10,10,10,${heatOpacity(cell.count)})`
-                    : "transparent",
+                  background: cell ? heatColor(cell.count) : "transparent",
                   border: selected
-                    ? "2px solid var(--color-reading)"
+                    ? "2px solid var(--color-ink)"
                     : cell
                     ? "1px solid var(--color-hair)"
                     : "none",
@@ -243,13 +248,13 @@ function Heatmap({
         <span className="text-[8px] font-bold tracking-[1px] text-dim">
           LESS
         </span>
-        {[0.06, 0.22, 0.42, 0.65, 0.9].map((op) => (
+        {[0, 2, 5, 9, 12].map((c) => (
           <div
-            key={op}
+            key={c}
             style={{
               width: 10,
               height: 10,
-              background: `rgba(10,10,10,${op})`,
+              background: heatColor(c),
               border: "1px solid var(--color-hair)",
             }}
           />
@@ -258,6 +263,127 @@ function Heatmap({
           MORE
         </span>
       </div>
+    </div>
+  );
+}
+
+// ─── trend chart ─────────────────────────────────────────────────────────
+
+const TREND_DAYS = 28;
+
+function TrendChart({ days }: { days: DayCount[] }) {
+  const countMap = new Map(days.map((d) => [d.date, d.count]));
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const series: { date: string; count: number; isToday: boolean }[] = [];
+  for (let i = TREND_DAYS - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const ds = toDateStr(d);
+    series.push({ date: ds, count: countMap.get(ds) ?? 0, isToday: i === 0 });
+  }
+
+  const counts = series.map((s) => s.count);
+  const max = Math.max(1, ...counts);
+  const avg = (arr: number[]) =>
+    arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const last7 = avg(counts.slice(-7));
+  const prev7 = avg(counts.slice(-14, -7));
+  const todayCt = counts[counts.length - 1];
+  const deltaPct = prev7 > 0 ? Math.round(((last7 - prev7) / prev7) * 100) : null;
+  // Fewer cigarettes = improvement.
+  const deltaColor =
+    deltaPct == null || deltaPct === 0
+      ? "var(--color-dim)"
+      : last7 < prev7
+      ? GREEN
+      : RED;
+  const deltaText =
+    deltaPct == null
+      ? "—"
+      : `${deltaPct > 0 ? "▲" : deltaPct < 0 ? "▼" : ""}${Math.abs(deltaPct)}%`;
+
+  const startD = new Date(today);
+  startD.setDate(startD.getDate() - (TREND_DAYS - 1));
+
+  return (
+    <div className="border-b-2 border-ink" style={{ padding: "14px 18px" }}>
+      <div className="text-[9px] font-bold tracking-[2.4px] text-dim mb-3">
+        ▸ DAILY TREND · CIGARETTES / DAY
+      </div>
+
+      {/* headline stats */}
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        <TrendStat label="TODAY" value={String(todayCt)} />
+        <TrendStat label="7-DAY AVG" value={last7.toFixed(1)} />
+        <TrendStat label="VS PREV 7D" value={deltaText} color={deltaColor} />
+      </div>
+
+      {/* bars */}
+      <div className="relative" style={{ height: 70 }}>
+        {/* 7-day-avg reference line */}
+        <div
+          className="absolute left-0 right-0"
+          style={{
+            bottom: `${(last7 / max) * 100}%`,
+            borderTop: "1px dashed rgba(10,10,10,0.45)",
+          }}
+        />
+        <div className="absolute inset-0 flex items-end" style={{ gap: 2 }}>
+          {series.map((s) => (
+            <div
+              key={s.date}
+              className="flex-1"
+              title={`${s.date}: ${s.count}`}
+              style={{
+                height: `${(s.count / max) * 100}%`,
+                minHeight: s.count > 0 ? 2 : 0,
+                background: s.isToday ? "var(--color-reading)" : RED,
+                border: s.isToday ? "1px solid var(--color-ink)" : "none",
+                opacity: s.count > 0 ? 1 : 0,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* x-axis: start → today */}
+      <div className="flex justify-between mt-1.5 text-[8px] font-bold tracking-[1px] text-dim tabular-nums">
+        <span>
+          {startD.getDate()} {MONTHS[startD.getMonth()]}
+        </span>
+        <span style={{ color: "var(--color-reading)" }}>TODAY</span>
+      </div>
+    </div>
+  );
+}
+
+function TrendStat({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+}) {
+  return (
+    <div
+      className="border-2 border-ink"
+      style={{
+        background: "var(--color-bg)",
+        padding: "8px 10px",
+        boxShadow: "3px 3px 0 var(--color-ink)",
+      }}
+    >
+      <div
+        className="text-[22px] font-bold tabular-nums leading-none"
+        style={{ letterSpacing: "-1px", color: color ?? "var(--color-ink)" }}
+      >
+        {value}
+      </div>
+      <div className="text-[8px] font-bold tracking-[1.5px] text-dim mt-1.5">{label}</div>
     </div>
   );
 }
