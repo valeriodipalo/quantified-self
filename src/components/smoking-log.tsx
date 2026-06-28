@@ -26,6 +26,10 @@ interface PackStat {
   note: string | null;
   duration_hours: number | null;
 }
+interface ResistTotals {
+  allTimeSub: number;
+  allTimeReal: number;
+}
 
 const MONTHS = [
   "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -37,6 +41,7 @@ export function SmokingLog() {
   const [dayCounts, setDayCounts] = useState<DayCount[]>([]);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [packs, setPacks] = useState<PackStat[]>([]);
+  const [resistTotals, setResistTotals] = useState<ResistTotals | null>(null);
 
   useEffect(() => {
     fetch("/api/smoking/heatmap")
@@ -46,6 +51,10 @@ export function SmokingLog() {
     fetch("/api/smoking/pack-stats")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d) setPacks(d.packs); })
+      .catch(() => {});
+    fetch("/api/smoking/resist/totals")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setResistTotals(d); })
       .catch(() => {});
   }, []);
 
@@ -59,6 +68,7 @@ export function SmokingLog() {
 
   return (
     <div className="flex-1 overflow-y-auto">
+      <ResistSummary totals={resistTotals} />
       <Heatmap
         days={dayCounts}
         selectedDate={selectedDate}
@@ -481,6 +491,43 @@ function PackHistory({ packs }: { packs: PackStat[] }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ─── resist summary ──────────────────────────────────────────────────────
+
+function ResistSummary({ totals }: { totals: ResistTotals | null }) {
+  const sub = totals?.allTimeSub ?? 0;
+  const real = totals?.allTimeReal ?? 0;
+  return (
+    <div className="border-b-2 border-ink" style={{ padding: "14px 18px" }}>
+      <div className="text-[9px] font-bold tracking-[2.4px] text-dim mb-3">
+        ▸ RESISTANCE · ALL TIME
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div
+          className="border-2 border-ink"
+          style={{ padding: "10px 12px", background: "var(--color-bg)", boxShadow: "3px 3px 0 var(--color-ink)" }}
+        >
+          <div className="text-[34px] font-bold tabular-nums leading-none" style={{ letterSpacing: "-1.5px" }}>
+            {sub}
+          </div>
+          <div className="text-[8px] font-bold tracking-[1.5px] text-dim mt-1.5">RESISTED</div>
+        </div>
+        <div
+          className="border-2 border-ink"
+          style={{ padding: "10px 12px", background: "var(--color-bg)", boxShadow: "3px 3px 0 #34C759" }}
+        >
+          <div
+            className="text-[34px] font-bold tabular-nums leading-none"
+            style={{ letterSpacing: "-1.5px", color: "#34C759" }}
+          >
+            {real}
+          </div>
+          <div className="text-[8px] font-bold tracking-[1.5px] text-dim mt-1.5">REAL · ≥1.5H</div>
+        </div>
       </div>
     </div>
   );

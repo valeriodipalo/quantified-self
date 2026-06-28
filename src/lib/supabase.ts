@@ -151,21 +151,190 @@ export async function findPackContaining(timestamp: string): Promise<SmokingPack
   return (data as SmokingPackRow | null) ?? null;
 }
 
-export async function getLastSmokingSessionEnd(): Promise<string | null> {
+// Anchor for "time since last cigarette". Uses started_at (the moment the
+// cigarette was logged), not ended_at — the 5-min event end is 5 min in the
+// future right after logging, which would make the badge read 0 for 5 minutes.
+export async function getLastSmokingStart(): Promise<string | null> {
   const client = getSupabaseAdmin();
   if (!client) return null;
   const { data, error } = await client
     .from("sessions")
-    .select("ended_at")
+    .select("started_at")
     .eq("activity", "smoking")
-    .order("ended_at", { ascending: false })
+    .order("started_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) {
-    console.error("[sessions] getLastSmokingEnd:", error.message);
+    console.error("[sessions] getLastSmokingStart:", error.message);
     return null;
   }
-  return (data as { ended_at: string } | null)?.ended_at ?? null;
+  return (data as { started_at: string } | null)?.started_at ?? null;
+}
+
+// ─── smoking resists ───────────────────────────────────────────────────
+
+export const RESIST_THRESHOLD_MS = 90 * 60_000; // 1.5h
+
+export interface ResistActiveWindow {
+  firstTapAt: string; // ISO — first resist tap of the current open gap
+  matured: boolean; // has it already crossed 1.5h with no cigarette?
+}
+
+export interface ResistData {
+  todaySmoked: number; // cigarettes logged today
+  todaySub: number; // every tap today (urges fought)
+  todayReal: number; // windows that matured today (genuine resists)
+  activeWindow: ResistActiveWindow | null;
+}
+
+export interface ResistTotals {
+  allTimeSub: number;
+  allTimeReal: number;
+}
+
+export async function logResist(input: {
+  resistedAt?: string;
+  packId?: string | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const client = getSupabaseAdmin();
+  if (!client) return { ok: false, error: "supabase env not configured" };
+  const payload: Record<string, unknown> = {};
+  if (input.resistedAt) payload.resisted_at = input.resistedAt;
+  if (input.packId) payload.pack_id = input.packId;
+  const { error } = await client.from("smoking_resists").insert(payload);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+interface ResistWindow {
+  firstTapMs: number;
+  maturedAtMs: number | null; // null = not matured (user smoked in time, or still pending)
+  isOpen: boolean; // true = the gap after the last cigarette (no next cigarette yet)
+}
+
+// Group resist taps into per-gap windows and decide which matured.
+//
+// A "gap" is the span between two consecutive cigarettes (or after the last
+// one). The first tap inside a gap opens that gap's window. The window matures
+// — counts as ONE real resist — if no cigarette is logged within 1.5h of that
+// first tap. Max one real resist per gap.
+//
+// cigStarts and taps are epoch-ms arrays (any order). now is epoch ms.
+export function deriveResistWindows(
+  cigStarts: number[],
+  taps: number[],
+  now: number,
+): ResistWindow[] {
+  const cigs = [...cigStarts].sort((a, b) => a - b);
+  const sortedTaps = [...taps].sort((a, b) => a - b);
+
+  // gapKey = number of cigarettes at/before the tap. Taps sharing a gapKey live
+  // in the same gap; the earliest is that gap's first tap. Taps are ascending,
+  // so the first time a gapKey is seen is its minimum.
+  const firstTapByGap = new Map<number, number>();
+  let ci = 0;
+  for (const t of sortedTaps) {
+    while (ci < cigs.length && cigs[ci] <= t) ci++;
+    if (!firstTapByGap.has(ci)) firstTapByGap.set(ci, t);
+  }
+
+  const windows: ResistWindow[] = [];
+  for (const [gapKey, firstTap] of firstTapByGap) {
+    const nextCig = gapKey < cigs.length ? cigs[gapKey] : null;
+    const isOpen = nextCig == null;
+    const matureMoment = firstTap + RESIST_THRESHOLD_MS;
+    let maturedAtMs: number | null = null;
+    if (isOpen) {
+      if (now >= matureMoment) maturedAtMs = matureMoment;
+    } else if (nextCig! >= matureMoment) {
+      maturedAtMs = matureMoment;
+    }
+    windows.push({ firstTapMs: firstTap, maturedAtMs, isOpen });
+  }
+  return windows;
+}
+
+// Stats for the main screen: today's counters + the live window (if any).
+// `dayStartMs` is the client's local midnight, so "today" matches the user's
+// timezone rather than the server's. Bounded to a recent lookback so the page
+// query stays cheap; the open gap and any of today's windows are always recent.
+export async function getResistData(opts: {
+  dayStartMs: number;
+  lookbackDays?: number;
+}): Promise<ResistData> {
+  const empty: ResistData = { todaySmoked: 0, todaySub: 0, todayReal: 0, activeWindow: null };
+  const client = getSupabaseAdmin();
+  if (!client) return empty;
+
+  const now = Date.now();
+  const sinceIso = new Date(
+    now - (opts.lookbackDays ?? 14) * 86_400_000,
+  ).toISOString();
+
+  const [{ data: tapRows, error: tapErr }, { data: cigRows, error: cigErr }] =
+    await Promise.all([
+      client
+        .from("smoking_resists")
+        .select("resisted_at")
+        .gte("resisted_at", sinceIso)
+        .order("resisted_at", { ascending: true }),
+      client
+        .from("sessions")
+        .select("started_at")
+        .eq("activity", "smoking")
+        .gte("started_at", sinceIso)
+        .order("started_at", { ascending: true }),
+    ]);
+
+  if (tapErr) {
+    console.error("[smoking_resists] getResistData taps:", tapErr.message);
+    return empty;
+  }
+  if (cigErr) console.error("[sessions] getResistData cigs:", cigErr.message);
+
+  const taps = (tapRows ?? []).map((r) => Date.parse((r as { resisted_at: string }).resisted_at));
+  const cigs = (cigRows ?? []).map((r) => Date.parse((r as { started_at: string }).started_at));
+  const windows = deriveResistWindows(cigs, taps, now);
+
+  const todaySmoked = cigs.filter((t) => t >= opts.dayStartMs).length;
+  const todaySub = taps.filter((t) => t >= opts.dayStartMs).length;
+  const todayReal = windows.filter(
+    (w) => w.maturedAtMs != null && w.maturedAtMs >= opts.dayStartMs,
+  ).length;
+  const open = windows.find((w) => w.isOpen) ?? null;
+  const activeWindow: ResistActiveWindow | null = open
+    ? { firstTapAt: new Date(open.firstTapMs).toISOString(), matured: open.maturedAtMs != null }
+    : null;
+
+  return { todaySmoked, todaySub, todayReal, activeWindow };
+}
+
+// All-time totals for the LOG view. Full history (only fetched when LOG opens).
+export async function getResistTotals(): Promise<ResistTotals> {
+  const empty: ResistTotals = { allTimeSub: 0, allTimeReal: 0 };
+  const client = getSupabaseAdmin();
+  if (!client) return empty;
+
+  const now = Date.now();
+  const [{ data: tapRows, error: tapErr }, { data: cigRows }] = await Promise.all([
+    client.from("smoking_resists").select("resisted_at").order("resisted_at", { ascending: true }),
+    client
+      .from("sessions")
+      .select("started_at")
+      .eq("activity", "smoking")
+      .order("started_at", { ascending: true }),
+  ]);
+  if (tapErr) {
+    console.error("[smoking_resists] getResistTotals:", tapErr.message);
+    return empty;
+  }
+  const taps = (tapRows ?? []).map((r) => Date.parse((r as { resisted_at: string }).resisted_at));
+  const cigs = (cigRows ?? []).map((r) => Date.parse((r as { started_at: string }).started_at));
+  const windows = deriveResistWindows(cigs, taps, now);
+  return {
+    allTimeSub: taps.length,
+    allTimeReal: windows.filter((w) => w.maturedAtMs != null).length,
+  };
 }
 
 // ─── smoking analytics ─────────────────────────────────────────────────

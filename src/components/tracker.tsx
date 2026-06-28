@@ -29,6 +29,20 @@ type SheetKind = "closed" | "all-activities" | "pack" | "backdate";
 type SheetPhase = "closed" | "opening" | "open" | "closing";
 
 const NOTE_MAX_LEN = 4000;
+const RESIST_THRESHOLD_MS = 90 * 60_000; // 1.5h to a real resist
+
+interface ResistData {
+  todaySmoked: number;
+  todaySub: number;
+  todayReal: number;
+  activeWindow: { firstTapAt: string; matured: boolean } | null;
+}
+
+function startOfTodayMs(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
 
 export function Tracker({
   initialCapture,
@@ -61,7 +75,8 @@ export function Tracker({
   } | null>(null);
   const [, startTransition] = useTransition();
   const capStopFiredRef = useRef<number | null>(null);
-  const [lastSmokingEnd, setLastSmokingEnd] = useState<string | null>(null);
+  const [lastCigAt, setLastCigAt] = useState<string | null>(null);
+  const [resist, setResist] = useState<ResistData | null>(null);
   const [view, setView] = useState<"track" | "log">("track");
 
   useEffect(() => {
@@ -175,9 +190,45 @@ export function Tracker({
       const res = await fetch("/api/smoking/last-session");
       if (res.ok) {
         const data = await res.json();
-        setLastSmokingEnd(data.endedAt);
+        setLastCigAt(data.at);
       }
     } catch {}
+  };
+
+  const refreshResistStats = async () => {
+    try {
+      const res = await fetch(`/api/smoking/resist?dayStart=${startOfTodayMs()}`);
+      if (res.ok) setResist((await res.json()) as ResistData);
+    } catch {}
+  };
+
+  // RESISTED tap — kept off the global `busy` path so it stays snappy and never
+  // locks the LOG CIG button. Optimistically bumps the sub-counter; the server
+  // response (authoritative, includes any newly-matured real resist) replaces it.
+  const handleResist = async () => {
+    setResist((r) => (r ? { ...r, todaySub: r.todaySub + 1 } : r));
+    try {
+      const res = await fetch("/api/smoking/resist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dayStart: startOfTodayMs() }),
+      });
+      if (res.ok) setResist((await res.json()) as ResistData);
+    } catch {}
+  };
+
+  const handleLogCigarette = async () => {
+    const body: Record<string, unknown> = {};
+    const trimmed = startNote.trim();
+    if (trimmed) body.note = trimmed;
+    const data = await callApi("cigarette", "/api/smoking/cigarette", "POST", body);
+    if (data) {
+      setStartNote("");
+      await refreshPack();
+      await refreshLastCig();
+      await refreshResistStats();
+      startTransition(() => router.refresh());
+    }
   };
 
   const handleStart = async () => {
@@ -309,13 +360,37 @@ export function Tracker({
     fetch("/api/smoking/last-session")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!cancelled && d) setLastSmokingEnd(d.endedAt);
+        if (!cancelled && d) setLastCigAt(d.at);
+      })
+      .catch(() => {});
+    fetch(`/api/smoking/resist?dayStart=${startOfTodayMs()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d) setResist(d as ResistData);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [isSmoking]);
+
+  // When the active resist window is about to cross 1.5h, refetch once so the
+  // real-resist counter and the bar's "matured" state update without the user
+  // having to interact. The bar itself ticks locally (see ResistBar).
+  useEffect(() => {
+    if (!isSmoking) return;
+    const aw = resist?.activeWindow;
+    if (!aw || aw.matured) return;
+    const remaining =
+      new Date(aw.firstTapAt).getTime() + RESIST_THRESHOLD_MS - Date.now();
+    const id = setTimeout(() => {
+      refreshResistStats();
+    }, Math.max(0, remaining) + 750);
+    return () => clearTimeout(id);
+    // refreshResistStats identity changes each render but is behaviourally
+    // invariant; keyed on the window instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSmoking, resist?.activeWindow?.firstTapAt, resist?.activeWindow?.matured]);
 
   // ─── pack actions ────────────────────────────────────────────────────────
 
@@ -373,6 +448,7 @@ export function Tracker({
       if (activeId === "smoking") {
         await refreshPack();
         await refreshLastCig();
+        await refreshResistStats();
       }
       closeSheet();
       startTransition(() => router.refresh());
@@ -463,15 +539,29 @@ export function Tracker({
           />
         </div>
       )}
-      {isSmoking && lastSmokingEnd && (
+      {isSmoking && lastCigAt && (
         <div
           className="border-b-2 border-ink"
           style={{ padding: "6px 18px" }}
         >
-          <LastCigBadge endedAt={lastSmokingEnd} />
+          <LastCigBadge at={lastCigAt} />
         </div>
       )}
 
+      {isSmoking ? (
+        <SmokingCapture
+          resist={resist}
+          note={startNote}
+          setNote={setStartNote}
+          accent={accent}
+          busy={busy}
+          error={error}
+          debug={debug}
+          onResist={handleResist}
+          onLogCigarette={handleLogCigarette}
+        />
+      ) : (
+      <>
       {/* Hero timer */}
       <div className="flex-1 px-[18px] pt-[26px] pb-2">
         <div className="text-[9px] font-bold tracking-[2.4px] mb-1.5">
@@ -583,6 +673,8 @@ export function Tracker({
           </p>
         )}
       </div>
+      </>
+      )}
       </>
       ) : (
         <SmokingLog />
@@ -1071,68 +1163,45 @@ function BackdateSheet({
   }) => void;
   onClose: () => void;
 }) {
-  const [defaults] = useState(() => {
+  const [whenInput, setWhenInput] = useState(() => {
     const nowMs = Date.now();
-    const endMs = nowMs - (nowMs % 60_000);
-    const startMs = endMs - 6 * 60_000;
-    return { startInput: toLocalInput(startMs), endInput: toLocalInput(endMs) };
+    return toLocalInput(nowMs - (nowMs % 60_000));
   });
-  const [startInput, setStartInput] = useState(defaults.startInput);
-  const [endInput, setEndInput] = useState(defaults.endInput);
   const [note, setNote] = useState("");
-  const [reflection, setReflection] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
 
   const submit = () => {
-    const startMs = fromLocalInput(startInput);
-    const endMs = fromLocalInput(endInput);
-    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    const endMs = fromLocalInput(whenInput);
+    if (!Number.isFinite(endMs)) {
       setLocalError("invalid date/time");
       return;
     }
-    if (endMs <= startMs) {
-      setLocalError("end must be after start");
-      return;
-    }
     if (endMs > Date.now() + 60_000) {
-      setLocalError("end cannot be in the future");
+      setLocalError("cannot be in the future");
       return;
     }
     setLocalError(null);
+    // Fixed 5-min event ending at the chosen time.
+    const startMs = endMs - 5 * 60_000;
     onSubmit({
       startedAt: new Date(startMs).toISOString(),
       endedAt: new Date(endMs).toISOString(),
       startNote: note,
-      feedback: reflection,
+      feedback: "",
     });
   };
 
-  const durMs = fromLocalInput(endInput) - fromLocalInput(startInput);
-  const durMin = Number.isFinite(durMs) && durMs > 0 ? Math.round(durMs / 60_000) : null;
   const saveFg = contrast ? "var(--color-bg)" : "var(--color-ink)";
   const saveShadow = contrast ? "var(--color-reading)" : "var(--color-ink)";
 
   return (
-    <SheetShell title="LOG PAST SESSION" shown={shown} onClose={onClose}>
+    <SheetShell title="LOG PAST CIGARETTE" shown={shown} onClose={onClose}>
       <div className="px-[18px] py-4 flex flex-col gap-4">
-        <Field label="START">
+        <Field label="WHEN YOU SMOKED">
           <input
             type="datetime-local"
-            value={startInput}
-            onChange={(e) => setStartInput(e.target.value)}
-            className="w-full p-3 text-[15px] font-bold tabular-nums border-2 border-ink focus:outline-none"
-            style={{
-              background: "var(--color-bg)",
-              color: "var(--color-ink)",
-              boxShadow: "4px 4px 0 var(--color-ink)",
-            }}
-          />
-        </Field>
-        <Field label="END">
-          <input
-            type="datetime-local"
-            value={endInput}
-            onChange={(e) => setEndInput(e.target.value)}
+            value={whenInput}
+            onChange={(e) => setWhenInput(e.target.value)}
             className="w-full p-3 text-[15px] font-bold tabular-nums border-2 border-ink focus:outline-none"
             style={{
               background: "var(--color-bg)",
@@ -1142,9 +1211,9 @@ function BackdateSheet({
           />
         </Field>
         <div className="text-[10px] font-bold tracking-[2px] text-dim tabular-nums">
-          {durMin != null ? `▸ ${durMin} MIN` : "▸ — MIN"}
+          ▸ 5 MIN (FIXED)
         </div>
-        <Field label="NOTE AT START (optional)">
+        <Field label="NOTE (optional)">
           <input
             type="text"
             value={note}
@@ -1152,21 +1221,6 @@ function BackdateSheet({
             maxLength={NOTE_MAX_LEN}
             placeholder="context, why, where"
             className="w-full p-3 text-[15px] font-medium border-2 border-ink focus:outline-none placeholder:text-dim"
-            style={{
-              background: "var(--color-bg)",
-              color: "var(--color-ink)",
-              boxShadow: "4px 4px 0 var(--color-ink)",
-            }}
-          />
-        </Field>
-        <Field label="REFLECTION (optional)">
-          <textarea
-            value={reflection}
-            onChange={(e) => setReflection(e.target.value)}
-            rows={2}
-            maxLength={NOTE_MAX_LEN}
-            placeholder="how did it feel?"
-            className="w-full p-3 text-[15px] font-medium border-2 border-ink resize-none focus:outline-none placeholder:text-dim"
             style={{
               background: "var(--color-bg)",
               color: "var(--color-ink)",
@@ -1395,18 +1449,238 @@ function DiscardButton({
   );
 }
 
+// ─── smoking capture (one-tap log + resist) ─────────────────────────────
+
+const GREEN = "#34C759";
+const YELLOW = "#CC8800";
+const RED = "#FF3B30";
+
+function SmokingCapture({
+  resist,
+  note,
+  setNote,
+  accent,
+  busy,
+  error,
+  debug,
+  onResist,
+  onLogCigarette,
+}: {
+  resist: ResistData | null;
+  note: string;
+  setNote: (v: string) => void;
+  accent: string;
+  busy: boolean;
+  error: string | null;
+  debug: string | null;
+  onResist: () => void;
+  onLogCigarette: () => void;
+}) {
+  const smoked = resist?.todaySmoked ?? 0;
+  const sub = resist?.todaySub ?? 0;
+  const real = resist?.todayReal ?? 0;
+  const aw = resist?.activeWindow ?? null;
+
+  return (
+    <>
+      <div className="flex-1 px-[18px] pt-[22px] pb-2">
+        <div className="text-[9px] font-bold tracking-[2.4px] mb-3 text-dim">
+          ▸ TODAY
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <ResistStat label="SMOKED" value={smoked} color="var(--color-ink)" />
+          <ResistStat label="RESISTED" value={sub} color="var(--color-ink)" />
+          <ResistStat label="REAL ✓" value={real} color={GREEN} highlight />
+        </div>
+
+        <div className="mt-5">
+          {aw ? (
+            <ResistBar firstTapAt={aw.firstTapAt} />
+          ) : (
+            <div
+              className="border-2 border-ink p-3 text-center text-[10px] font-bold tracking-[1.5px] text-dim"
+              style={{ background: "var(--color-bg)" }}
+            >
+              NO ACTIVE RESIST — TAP RESISTED WHEN THE URGE HITS
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="px-[18px] pt-4" style={{ paddingBottom: "3rem" }}>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="note for next cigarette (optional)"
+          rows={2}
+          maxLength={NOTE_MAX_LEN}
+          disabled={busy}
+          className="w-full mb-4 p-3 text-[15px] font-medium border-2 border-ink resize-none focus:outline-none placeholder:text-dim disabled:opacity-60"
+          style={{
+            background: "var(--color-bg)",
+            color: "var(--color-ink)",
+            caretColor: accent,
+            letterSpacing: "0.3px",
+            boxShadow: `4px 4px 0 var(--color-ink)`,
+          }}
+        />
+
+        <div className="flex gap-3">
+          <ReliableButton
+            type="button"
+            onPress={onResist}
+            disabled={busy}
+            className="flex-1 h-[84px] text-[20px] font-bold uppercase border-2 border-ink disabled:opacity-60 disabled:cursor-default"
+            style={{
+              background: GREEN,
+              color: "var(--color-ink)",
+              letterSpacing: "3px",
+              boxShadow: `6px 6px 0 var(--color-ink)`,
+              touchAction: "manipulation",
+            }}
+          >
+            RESISTED
+          </ReliableButton>
+          <ReliableButton
+            type="button"
+            onPress={onLogCigarette}
+            disabled={busy}
+            className="flex-1 h-[84px] text-[17px] font-bold uppercase border-2 border-ink disabled:opacity-60 disabled:cursor-default"
+            style={{
+              background: accent,
+              color: "var(--color-bg)",
+              letterSpacing: "2px",
+              boxShadow: `6px 6px 0 var(--color-reading)`,
+              touchAction: "manipulation",
+            }}
+          >
+            {busy ? "…" : "LOG CIG"}
+          </ReliableButton>
+        </div>
+        {error && <p className="mt-3 text-[11px] tracking-[1px] text-reading">! {error}</p>}
+        {debug && (
+          <p className="mt-2 text-[10px] tabular-nums tracking-[1px] text-dim break-all">
+            ▸ {debug}
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ResistStat({
+  label,
+  value,
+  color,
+  highlight,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className="border-2 border-ink"
+      style={{
+        background: "var(--color-bg)",
+        padding: "11px 10px",
+        boxShadow: highlight ? `4px 4px 0 ${GREEN}` : `4px 4px 0 var(--color-ink)`,
+      }}
+    >
+      <div
+        className="text-[38px] font-bold tabular-nums leading-none"
+        style={{ color, letterSpacing: "-2px" }}
+      >
+        {value}
+      </div>
+      <div className="text-[8px] font-bold tracking-[1.5px] text-dim mt-2">{label}</div>
+    </div>
+  );
+}
+
+// Progress bar from the first resist tap toward the 1.5h goal. Fill colour
+// walks the three half-hour thirds: red → yellow (0:30) → green (1:00), full
+// and credited at 1:30. Ticks locally every second.
+function ResistBar({ firstTapAt }: { firstTapAt: string }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [firstTapAt]);
+
+  const ms = Math.max(0, now - new Date(firstTapAt).getTime());
+  const mins = ms / 60_000;
+  const pct = Math.min(100, (ms / RESIST_THRESHOLD_MS) * 100);
+  const matured = ms >= RESIST_THRESHOLD_MS;
+  const color = mins < 30 ? RED : mins < 60 ? YELLOW : GREEN;
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1.5">
+        <span className="text-[9px] font-bold tracking-[2px]" style={{ color }}>
+          {matured ? "■ REAL RESIST ✓" : "● RESISTING"}
+        </span>
+        <span
+          className="text-[13px] font-bold tabular-nums tracking-[1px]"
+          style={{ color }}
+        >
+          {formatMMSS(ms)} / 1:30
+        </span>
+      </div>
+      <div
+        className="relative h-[18px] border-2 border-ink overflow-hidden"
+        style={{ background: "var(--color-hair)" }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            background: color,
+            transition: "width 1s linear",
+          }}
+        />
+        {/* thirds at 0:30 and 1:00 */}
+        <span
+          className="absolute top-0 bottom-0"
+          style={{ left: "33.333%", width: 2, background: "var(--color-ink)", opacity: 0.35 }}
+        />
+        <span
+          className="absolute top-0 bottom-0"
+          style={{ left: "66.666%", width: 2, background: "var(--color-ink)", opacity: 0.35 }}
+        />
+      </div>
+      <div className="flex justify-between mt-1 text-[8px] font-bold tracking-[1px] text-dim tabular-nums">
+        <span>0:30</span>
+        <span>1:00</span>
+        <span>1:30 ✓</span>
+      </div>
+    </div>
+  );
+}
+
+function formatMMSS(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 // ─── last-cig badge ────────────────────────────────────────────────────
 
-function LastCigBadge({ endedAt }: { endedAt: string }) {
+function LastCigBadge({ at }: { at: string }) {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(id);
-  }, [endedAt]);
+  }, [at]);
 
-  const ms = now - new Date(endedAt).getTime();
+  const ms = now - new Date(at).getTime();
   const hours = ms / 3_600_000;
   const color =
     hours < 1 ? "#FF3B30" : hours < 1.5 ? "#CC8800" : "#34C759";

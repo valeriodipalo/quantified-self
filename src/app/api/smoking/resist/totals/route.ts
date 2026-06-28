@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
 import { sessionOptions, SessionData } from "@/lib/session";
-import { getLastSmokingStart } from "@/lib/supabase";
+import { getResistTotals } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -11,8 +11,6 @@ export async function GET() {
   if (!session.refreshToken) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
-
-  // `at` = start of the most recent cigarette (when it was logged).
-  const at = await getLastSmokingStart();
-  return NextResponse.json({ at });
+  const data = await getResistTotals();
+  return NextResponse.json(data);
 }

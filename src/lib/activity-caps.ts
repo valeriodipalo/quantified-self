@@ -7,7 +7,9 @@ export interface ActivityCap {
 
 export const ACTIVITY_CAPS: Record<ActivityId, ActivityCap | null> = {
   reading: { thresholdMs: 90 * 60_000, cappedMs: 45 * 60_000 },
-  smoking: { thresholdMs: 10 * 60_000, cappedMs: 6 * 60_000 },
+  // Smoking no longer uses the live stopwatch: each cigarette is logged as a
+  // fixed 5-min event via /api/smoking/cigarette, so there is nothing to cap.
+  smoking: null,
   meditation: null,
   music: null,
 };
